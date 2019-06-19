@@ -1,0 +1,359 @@
+app:
+  envs:
+  - BITRISE_WORKSPACE: Folio.xcworkspace
+  - BITRISE_SCHEME: Folio-Release-Staging
+  - SLACK_WEBHOOK_URL: https://hooks.slack.com/services/AAAAAAAAA/BBBBBBBBB/aaaaaaaaaaaaaaaaaaaaaaaa
+  - SLACK_CHANNEL: '#ios-ci'
+  - FASTLANE_DONT_STORE_PASSWORD: "1"
+    opts:
+      is_expand: false
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+format_version: "4"
+project_type: ios
+trigger_map:
+- push_branch: master
+  workflow: test
+- push_branch: v*
+  workflow: test
+- pull_request_source_branch: _release/*
+  workflow: deliver
+- pull_request_source_branch: _testflight/*
+  workflow: deliver-external
+- pull_request_source_branch: _fabric-beta/*
+  workflow: deliver-internal
+- pull_request_target_branch: '*'
+  workflow: test
+workflows:
+  _prepare:
+    steps:
+    - activate-ssh-key:
+        run_if: '{{getenv "SSH_RSA_PRIVATE_KEY" | ne ""}}'
+    - git-clone:
+        inputs:
+        - update_submodules: "no"
+    - cache-pull: {}
+    - brew-install:
+        inputs:
+        - packages: carthage
+    - script:
+        inputs:
+        - content: |-
+            #!/bin/bash
+            set -ex
+
+            bundle install --path=vendor/bundle --binstubs=vendor/bin
+            bundle exec fastlane download_build_cache
+
+            shouldUpload=false
+            if [ ! -d "Carthage" ]; then
+              Scripts/build_carthage
+              shouldUpload=true
+            fi
+
+            if [ ! -d "Pods" ]; then
+              Scripts/build_pods
+              shouldUpload=true
+            fi
+
+            if "${shouldUpload}"; then
+              bundle exec fastlane upload_build_cache
+            fi
+        title: Install dependencies
+  deliver:
+    after_run:
+    - deliver-internal
+    - deliver-external
+  deliver-external:
+    before_run:
+    - _prepare
+    envs:
+    - BITRISE_SCHEME: Folio-Release-Production
+    - BITRISE_CONFIG: Release
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -ex
+
+            export SRCROOT=.
+            ./Scripts/BuildPhases/SetBuildVariants-Production.sh
+        title: SetBuildVariants-Production
+    - ios-auto-provision:
+        inputs:
+        - team_id: EEZMTM2696
+        - project_path: $BITRISE_WORKSPACE
+        - configuration: $BITRISE_CONFIG
+        - generate_profiles: "yes"
+        - distribution_type: app-store
+    - xcode-archive:
+        inputs:
+        - export_method: app-store
+        - project_path: $BITRISE_WORKSPACE
+        - configuration: $BITRISE_CONFIG
+        - is_export_xcarchive_zip: "yes"
+        - force_provisioning_profile: ""
+        - output_tool: xcodebuild
+    - deploy-to-itunesconnect-deliver:
+        inputs:
+        - password: $ITUNES_CONNECT_PASSWORD
+        - itunescon_user: $ITUNES_CONNECT_ID
+        - app_id: $ITUNES_CONNECT_APP_APPLE_ID
+    - deploy-to-bitrise-io:
+        inputs:
+        - is_enable_public_page: "false"
+    - slack:
+        inputs:
+        - webhook_url: $SLACK_WEBHOOK_URL
+        - channel: $SLACK_CHANNEL
+        - from_username: Bitrise CI(deliver-external) - OK
+        - api_token: $SLACK_API_TOKEN
+        - from_username_on_error: Bitrise CI(deliver-external) - FAILED
+  deliver-internal:
+    before_run:
+    - _prepare
+    envs:
+    - BITRISE_SCHEME: Folio-Release-Staging
+    - BITRISE_CONFIG: Release
+    - CRASHLYTICS_IOS_TESTERS: tester-iOS
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -ex
+
+            export SRCROOT=.
+            ./Scripts/BuildPhases/SetBuildVariants-Staging.sh
+        title: SetBuildVariants-Staging
+    - ios-auto-provision:
+        inputs:
+        - distribution_type: ad-hoc
+        - team_id: AAAAAA1111
+        - configuration: $BITRISE_CONFIG
+        - generate_profiles: "yes"
+        - project_path: $BITRISE_WORKSPACE
+    - xcode-archive:
+        inputs:
+        - project_path: $BITRISE_WORKSPACE
+        - configuration: $BITRISE_CONFIG
+        - force_provisioning_profile: ""
+        - export_method: ad-hoc
+        - is_export_xcarchive_zip: "yes"
+    - deploy-to-bitrise-io: {}
+    - fabric-crashlytics-beta-deploy:
+        inputs:
+        - build_secret: $CRASHLYTICS_BUILD_SECRET
+        - group_aliases_list: $CRASHLYTICS_IOS_TESTERS
+        - api_key: $CRASHLYTICS_API_TOKEN
+    - slack:
+        inputs:
+        - webhook_url: $SLACK_WEBHOOK_URL
+        - channel: $SLACK_CHANNEL
+        - from_username: Bitrise CI(deliver-internal) - OK
+        - api_token: $SLACK_API_TOKEN
+        - from_username_on_error: Bitrise CI(deliver-internal) - FAILED
+  nightly-build:
+    after_run:
+    - test
+    before_run: []
+  nightly-tests:
+    before_run:
+    - _prepare
+    steps:
+    - swiftlint:
+        inputs:
+        - linting_path: .
+        - strict: "yes"
+    - script:
+        inputs:
+        - content: |
+            #!/bin/bash
+            set -ex
+
+            sudo systemsetup -settimezone Asia/Tokyo
+
+            export NSUnbufferedIO=YES
+
+            BRANCH=${BITRISEIO_GIT_BRANCH_DEST:-$BITRISE_GIT_BRANCH}
+            DIFF_FILES="$(git diff --name-only origin/${BRANCH})"
+
+            CHENGE_SWIFTGEN_FILE=$(echo "$DIFF_FILES" | grep 'Swiftgen/ImageAssets.swift' || true)
+            if [ -n "$CHENGE_SWIFTGEN_FILE" ]; then
+              bundle exec fastlane image_assets_tests
+            fi
+
+            bundle exec fastlane folio_nightly_tests
+            ruby Scripts/coverage.rb Folio
+
+            bundle exec fastlane redux_tests
+            ruby Scripts/coverage.rb Redux
+
+            bundle exec fastlane notification_service_tests
+            ruby Scripts/coverage.rb NotificationServiceLib
+
+            bash <(curl -s https://codecov.io/bash) -f coverage.txt -t ${CODECOV_TOKEN}
+        title: Test
+    - cache-push:
+        inputs:
+        - cache_paths: |-
+            $BITRISE_CACHE_DIR
+            ./vendor -> ./Gemfile.lock
+        - ignore_check_on_paths: ""
+    - deploy-to-bitrise-io:
+        inputs:
+        - is_compress: "true"
+        - is_enable_public_page: "false"
+        - deploy_path: ${BITRISE_SOURCE_DIR}/FolioTests/FailureDiffs
+    - slack:
+        inputs:
+        - webhook_url: $SLACK_WEBHOOK_URL
+        - channel: $SLACK_CHANNEL
+        - from_username: OK
+        - from_username_on_error: ERROR
+        - message_on_error: |-
+            $BITRISE_GIT_MESSAGE
+        - pretext: '*Test Succeeded!*'
+        - pretext_on_error: '*Test Failed!*'
+        - api_token: $SLACK_API_TOKEN
+        run_if: .IsBuildFailed
+  refresh-dSYMs:
+    before_run:
+    - _prepare
+    description: Run fastlane refresh_dsyms to update dSYM on Bugsnag
+    envs:
+    - CRASHLYTICS_API_TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/bin/bash
+            set -ex
+
+            bundle exec fastlane refresh_dsyms
+        title: Refresh dSYMs
+  renew-build-cache:
+    before_run:
+    - _prepare
+    steps:
+    - script@1.1.5:
+        inputs:
+        - content: |
+            #!/usr/bin/env bash
+            set -ex
+
+            rm -rf Carthage
+            rm -rf Pods
+
+            Scripts/build_dependencies
+
+            bundle exec fastlane renew_build_cache
+        title: Renew build cache
+  sync-bitrise-yml:
+    before_run:
+    - _prepare
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -ex
+            bundle exec fastlane sync_bitrise_yml
+        title: Sync bitrise.yml
+  test:
+    before_run:
+    - _prepare
+    steps:
+    - swiftlint:
+        inputs:
+        - linting_path: .
+        - strict: "yes"
+    - script:
+        inputs:
+        - content: |
+            #!/bin/bash
+            set -ex
+
+            sudo systemsetup -settimezone Asia/Tokyo
+
+            export NSUnbufferedIO=YES
+
+            BRANCH=${BITRISEIO_GIT_BRANCH_DEST:-$BITRISE_GIT_BRANCH}
+            DIFF_FILES="$(git diff --name-only origin/${BRANCH})"
+
+            CHENGE_SWIFTGEN_FILE=$(echo "$DIFF_FILES" | grep 'Swiftgen/ImageAssets.swift' || true)
+            if [ -n "$CHENGE_SWIFTGEN_FILE" ]; then
+              bundle exec fastlane image_assets_tests
+            fi
+
+            bundle exec fastlane folio_tests
+            ruby Scripts/coverage.rb Folio
+
+            bundle exec fastlane redux_tests
+            ruby Scripts/coverage.rb Redux
+
+            bundle exec fastlane notification_service_tests
+            ruby Scripts/coverage.rb NotificationServiceLib
+
+            bash <(curl -s https://codecov.io/bash) -f coverage.txt -t ${CODECOV_TOKEN}
+        title: Test
+    - cache-push:
+        inputs:
+        - cache_paths: |-
+            $BITRISE_CACHE_DIR
+            ./vendor -> ./Gemfile.lock
+        - ignore_check_on_paths: ""
+    - deploy-to-bitrise-io:
+        inputs:
+        - is_compress: "true"
+        - is_enable_public_page: "false"
+        - deploy_path: ${BITRISE_SOURCE_DIR}/FolioTests/FailureDiffs
+    - slack:
+        inputs:
+        - webhook_url: $SLACK_WEBHOOK_URL
+        - channel: $SLACK_CHANNEL
+        - from_username: OK
+        - from_username_on_error: ERROR
+        - message_on_error: |-
+            $BITRISE_GIT_MESSAGE
+        - pretext: '*Test Succeeded!*'
+        - pretext_on_error: '*Test Failed!*'
+        - api_token: $SLACK_API_TOKEN
+        run_if: .IsBuildFailed
+  update-dependencies:
+    before_run:
+    - _prepare
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -ex
+            if [ "$CI" = true ] ; then
+              bundle exec pod keys set MarketoAccountId $MARKETO_ACCOUNT_ID Folio
+              bundle exec pod keys set MarketoSecretKey $MARKETO_SECRET_KEY Folio
+            fi
+            bundle exec fastlane update_dependencies
+        title: Update Dependencies
+  update-license-plist:
+    before_run:
+    - _prepare
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/usr/bin/env bash
+            set -ex
+            bundle exec fastlane update_license_list
+        title: Update License Plist
+  update-tools:
+    before_run:
+    - _prepare
+    steps:
+    - script:
+        inputs:
+        - content: |
+            #!/usr/bin/env bash
+            set -ex
+            bundle exec fastlane update_tools
+        title: Update Developer Tools

@@ -1,0 +1,8 @@
+$(PODS_CONFIGURATION_BUILD_DIR)/DeallocationChecker/DeallocationChecker.framework
+$(PODS_CONFIGURATION_BUILD_DIR)/FolioAPI/FolioAPI.framework
+$(PODS_CONFIGURATION_BUILD_DIR)/GoogleToolboxForMac/GoogleToolboxForMac.framework
+$(PODS_CONFIGURATION_BUILD_DIR)/GoogleUtilities/GoogleUtilities.framework
+$(PODS_CONFIGURATION_BUILD_DIR)/GTMSessionFetcher/GTMSessionFetcher.framework
+$(PODS_CONFIGURATION_BUILD_DIR)/Keys-framework/Keys.framework
+$(PODS_CONFIGURATION_BUILD_DIR)/nanopb/nanopb.framework
+$(PODS_CONFIGURATION_BUILD_DIR)/Protobuf/Protobuf.framework

@@ -1,0 +1,7 @@
+#!/bin/bash
+
+set -ex
+
+PROJECT_ROOT=$(cd $(dirname $0); cd ..; pwd)
+(cd "$PROJECT_ROOT"; carthage checkout)
+(cd "$PROJECT_ROOT"; carthage build --no-use-binaries --platform ios --cache-builds)

@@ -1,0 +1,25 @@
+#!/bin/bash
+
+set -exo pipefail
+
+PROJECT_ROOT=$(cd $(dirname $0); cd ..; pwd)
+PODS_ROOT="$PROJECT_ROOT/Pods"
+PODS_PROJECT="$PODS_ROOT/Pods.xcodeproj"
+SYMROOT="$PODS_ROOT/Build"
+
+if [ "$CI" = true ] ; then
+  (cd "$PROJECT_ROOT"; bundle exec pod keys set MarketoAccountId $MARKETO_ACCOUNT_ID Folio)
+  (cd "$PROJECT_ROOT"; bundle exec pod keys set MarketoSecretKey $MARKETO_SECRET_KEY Folio)
+fi
+(cd "$PROJECT_ROOT"; bundle exec pod repo update)
+(cd "$PROJECT_ROOT"; COCOAPODS_DISABLE_STATS=true bundle exec pod install)
+
+xcodebuild -project "$PODS_PROJECT" \
+  -sdk iphoneos -configuration Release -alltargets \
+  ONLY_ACTIVE_ARCH=NO ENABLE_TESTABILITY=NO SYMROOT="$SYMROOT" \
+  CLANG_ENABLE_MODULE_DEBUGGING=NO \
+  BITCODE_GENERATION_MODE=bitcode | bundle exec xcpretty
+xcodebuild -project "$PODS_PROJECT" \
+  -sdk iphonesimulator -configuration Release -alltargets \
+  ONLY_ACTIVE_ARCH=NO ENABLE_TESTABILITY=NO SYMROOT="$SYMROOT" \
+  CLANG_ENABLE_MODULE_DEBUGGING=NO | bundle exec xcpretty
