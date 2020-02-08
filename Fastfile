@@ -244,23 +244,23 @@ platform :ios do
 
     def create_tag(tag, branch)
       data = {tag_name: tag, target_commitish: branch, name: tag, body: '', draft: false, prerelease: false}.to_json
-      url = "https://api.github.com/repos/#{slug}/releases?access_token=#{access_token}"
+      url = "https://api.github.com/repos/#{slug}/releases"
 
-      out, status = Open3.capture2(*['curl', '-sSL', '-d', "#{data}", "#{url}"])
+      out, status = Open3.capture2(*['curl', '-sSL', '-H', "Authorization: token #{access_token}", '-d', "#{data}", "#{url}"])
       JSON.parse(out)
     end
 
     def upload_release(filepath, release_id)
       filename = File.basename(filepath)
-      url = "https://uploads.github.com/repos/#{slug}/releases/#{release_id}/assets?name=#{filename}&access_token=#{access_token}"
+      url = "https://uploads.github.com/repos/#{slug}/releases/#{release_id}/assets?name=#{filename}"
 
-      Fastlane::Actions::sh %[curl -sSL -X POST "#{url}" -H "Content-Type: application/gzip" --data-binary @"#{filepath}"]
+      Fastlane::Actions::sh %[curl -sSL -H "Authorization: token #{access_token}" -X POST "#{url}" -H "Content-Type: application/gzip" --data-binary @"#{filepath}"]
     end
 
     def find_release(hash)
-      url = "https://api.github.com/repos/#{slug}/releases/tags/#{hash}?access_token=#{access_token}"
+      url = "https://api.github.com/repos/#{slug}/releases/tags/#{hash}"
 
-      out, status = Open3.capture2(*['curl', '-sSL', "#{url}"])
+      out, status = Open3.capture2(*['curl', '-sSL', '-H', "Authorization: token #{access_token}", "#{url}"])
       JSON.parse(out)
     end
 
@@ -269,7 +269,7 @@ platform :ios do
     end
 
     def asset_url(asset_id)
-      "https://api.github.com/repos/#{slug}/releases/assets/#{asset_id}?access_token=#{access_token}"
+      "https://api.github.com/repos/#{slug}/releases/assets/#{asset_id}"
     end
   end
 
